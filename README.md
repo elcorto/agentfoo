@@ -1,10 +1,10 @@
 # agentfoo
 
-CLI tools for OpenCode workflows.
+Tooling around (coding) agents
 
 ## Installation
 
-```bash
+```sh
 pip install -e .
 ```
 
@@ -14,7 +14,7 @@ pip install -e .
 
 Browse, filter, launch, and delete OpenCode sessions.
 
-```bash
+```sh
 oc-sessions
 oc-sessions --db PATH
 oc-sessions --sub
