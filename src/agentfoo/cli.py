@@ -20,7 +20,7 @@ from textual.widgets import Button, DataTable, Input, Static
 HOME_DIRECTORY = str(Path.home())
 TITLE_COLUMN_WIDTH = 512
 DIRECTORY_DISPLAY_MAX_CHARS = 48
-PRIMARY_MODES = ("plan", "build")
+PRIMARY_AGENTS = ("plan", "build")
 
 
 @dataclass(frozen=True)
@@ -28,12 +28,12 @@ class SessionRow:
     id: str
     directory: str
     model: str
-    mode: str
+    agent: str
     title: str
     time_updated: int
     display_updated: str
     display_directory: str
-    mode_models: tuple[tuple[str, str], ...]
+    agent_models: tuple[tuple[str, str], ...]
     search_text: str
 
 
@@ -89,17 +89,17 @@ def format_full_date(updated_timestamp_ms: int) -> str:
     )
 
 
-def sort_mode_models(
-    mode_models: list[tuple[str, str]],
+def sort_agent_models(
+    agent_models: list[tuple[str, str]],
 ) -> tuple[tuple[str, str], ...]:
     return tuple(
         sorted(
-            mode_models,
-            key=lambda mode_model: (
-                mode_model[0] not in PRIMARY_MODES,
-                PRIMARY_MODES.index(mode_model[0])
-                if mode_model[0] in PRIMARY_MODES
-                else mode_model[0],
+            agent_models,
+            key=lambda agent_model: (
+                agent_model[0] not in PRIMARY_AGENTS,
+                PRIMARY_AGENTS.index(agent_model[0])
+                if agent_model[0] in PRIMARY_AGENTS
+                else agent_model[0],
             ),
         )
     )
@@ -113,46 +113,36 @@ def load_sessions(
     if not include_subagent_sessions:
         subagent_clause = "AND session.parent_id IS NULL"
 
-    query = f"""
-    WITH latest_model AS (
-        SELECT
-            session_id,
-            json_extract(data, '$.mode') AS mode,
-            json_extract(data, '$.modelID') AS model_id,
-            ROW_NUMBER() OVER (
-                PARTITION BY session_id
-                ORDER BY time_updated DESC
-            ) AS row_num
-        FROM message
-        WHERE json_extract(data, '$.role') = 'assistant'
-            AND json_extract(data, '$.modelID') IS NOT NULL
-    )
+    session_query = f"""
     SELECT
         session.id,
         session.directory,
         session.title,
-        session.time_updated,
-        latest_model.mode,
-        latest_model.model_id
+        session.time_updated
     FROM session
-    LEFT JOIN latest_model
-        ON latest_model.session_id = session.id
-        AND latest_model.row_num = 1
     WHERE session.time_archived IS NULL
         {subagent_clause}
     ORDER BY session.time_updated DESC
     """
-    mode_query = f"""
-    WITH latest_mode_model AS (
+    agent_query = f"""
+    WITH latest_agent_model AS (
         SELECT
             message.session_id,
-            json_extract(message.data, '$.mode') AS mode,
+            COALESCE(
+                json_extract(message.data, '$.agent'),
+                json_extract(message.data, '$.mode')
+            ) AS agent,
             json_extract(message.data, '$.modelID') AS model_id,
+            message.time_updated,
+            message.id AS message_id,
             ROW_NUMBER() OVER (
                 PARTITION BY
                     message.session_id,
-                    json_extract(message.data, '$.mode')
-                ORDER BY message.time_updated DESC
+                    COALESCE(
+                        json_extract(message.data, '$.agent'),
+                        json_extract(message.data, '$.mode')
+                    )
+                ORDER BY message.time_updated DESC, message.id DESC
             ) AS row_num
         FROM message
         JOIN session
@@ -161,41 +151,59 @@ def load_sessions(
             {subagent_clause}
             AND json_extract(message.data, '$.role') = 'assistant'
             AND json_extract(message.data, '$.modelID') IS NOT NULL
-            AND json_extract(message.data, '$.mode') IS NOT NULL
     )
     SELECT
         session_id,
-        mode,
-        model_id
-    FROM latest_mode_model
+        agent,
+        model_id,
+        time_updated,
+        message_id
+    FROM latest_agent_model
     WHERE row_num = 1
     """
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
-        rows = connection.execute(query).fetchall()
-        mode_rows = connection.execute(mode_query).fetchall()
+        rows = connection.execute(session_query).fetchall()
+        agent_rows = connection.execute(agent_query).fetchall()
 
-    mode_models_by_session: dict[str, list[tuple[str, str]]] = {}
-    for mode_row in mode_rows:
-        mode_models_by_session.setdefault(mode_row["session_id"], []).append(
-            (mode_row["mode"], mode_row["model_id"])
+    agent_rows_by_session: dict[str, list[sqlite3.Row]] = {}
+    for agent_row in agent_rows:
+        agent_rows_by_session.setdefault(agent_row["session_id"], []).append(
+            agent_row
         )
 
     session_rows = []
     for database_row in rows:
         session_id = database_row["id"]
         directory = database_row["directory"]
-        model = database_row["model_id"] or "-"
-        mode = database_row["mode"] or ""
         title = database_row["title"]
         time_updated = database_row["time_updated"]
+        session_agent_rows = agent_rows_by_session.get(session_id, [])
+        latest_agent_row = max(
+            session_agent_rows,
+            key=lambda agent_row: (
+                agent_row["time_updated"],
+                agent_row["message_id"],
+            ),
+            default=None,
+        )
+        if latest_agent_row is None:
+            model = "-"
+            agent = ""
+        else:
+            model = latest_agent_row["model_id"]
+            agent = latest_agent_row["agent"] or ""
 
         display_updated = format_date(time_updated)
         display_directory = format_directory(
             directory, DIRECTORY_DISPLAY_MAX_CHARS
         )
-        mode_models = sort_mode_models(
-            mode_models_by_session.get(session_id, [])
+        agent_models = sort_agent_models(
+            [
+                (agent_row["agent"], agent_row["model_id"])
+                for agent_row in session_agent_rows
+                if agent_row["agent"] is not None
+            ]
         )
         search_text = f"{display_updated} {directory} {model} {title}"
 
@@ -204,12 +212,12 @@ def load_sessions(
                 id=session_id,
                 directory=directory,
                 model=model,
-                mode=mode,
+                agent=agent,
                 title=title,
                 time_updated=time_updated,
                 display_updated=display_updated,
                 display_directory=display_directory,
-                mode_models=mode_models,
+                agent_models=agent_models,
                 search_text=search_text,
             )
         )
@@ -538,14 +546,15 @@ class SessionApp(App[SessionRow | None]):
         )
         details_text.append(f"directory: {session_row.directory}\n")
         details_text.append("models: ")
-        if session_row.mode_models:
-            for index, (mode, model) in enumerate(session_row.mode_models):
+        if session_row.agent_models:
+            for index, (agent, model) in enumerate(session_row.agent_models):
                 if index > 0:
                     details_text.append(" ")
                 details_text.append(
-                    f"{mode}:{model}",
+                    f"{agent}:{model}",
                     style="italic"
-                    if mode == session_row.mode and model == session_row.model
+                    if agent == session_row.agent
+                    and model == session_row.model
                     else "",
                 )
         else:
@@ -674,7 +683,7 @@ class SessionApp(App[SessionRow | None]):
         self.exit()
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="""Browse and launch opencode sessions. We query the
         opencode SQLite database to access all sessions: global (directory=$HOME
@@ -696,9 +705,13 @@ def main():
     database_path = Path(arguments.db).expanduser()
 
     if not database_path.is_file():
-        raise FileNotFoundError(f"database not found: {database_path}")
+        parser.error(f"database not found: {database_path}")
 
-    opencode_command = get_opencode_command()
+    try:
+        opencode_command = get_opencode_command()
+    except FileNotFoundError as error:
+        parser.error(str(error))
+
     session_app = SessionApp(
         database_path=database_path,
         include_subagent_sessions=arguments.sub,
@@ -709,10 +722,14 @@ def main():
     if selected_session is None:
         return 0
 
-    subprocess.run(
-        [opencode_command, "-s", selected_session.id],
-        cwd=selected_session.directory,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [opencode_command, "-s", selected_session.id],
+            cwd=selected_session.directory,
+            check=False,
+        )
+    except OSError as error:
+        reason = error.strerror or str(error)
+        parser.exit(1, f"{parser.prog}: failed to launch session: {reason}\n")
 
-    return 0
+    return result.returncode
