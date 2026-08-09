@@ -11,7 +11,7 @@ dependencies = [
 
 
 [project.scripts]
-oc-sessions = "agentfoo.cli:main"
+oc-sessions = "agentfoo.cli:oc_sessions"
 
 
 [tool.ruff]

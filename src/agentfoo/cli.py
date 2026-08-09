@@ -683,7 +683,7 @@ class SessionApp(App[SessionRow | None]):
         self.exit()
 
 
-def main() -> int:
+def oc_sessions() -> int:
     parser = argparse.ArgumentParser(
         description="""Browse and launch opencode sessions. We query the
         opencode SQLite database to access all sessions: global (directory=$HOME
