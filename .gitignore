@@ -1,0 +1,12 @@
+__pycache__/
+*.swp
+*.egg-info
+*.bak
+*.ruff_cache/
+
+# python setup build
+build/
+dist/
+
+
+# vim: ft=conf
