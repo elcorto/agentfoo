@@ -1,7 +1,7 @@
 [project]
-name = "agentfoo"
+name = "oc-sessions"
 version = "0.1.0"
-description = "Tooling around (coding) agents"
+description = "Manage opencode sessions"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -11,7 +11,7 @@ dependencies = [
 
 
 [project.scripts]
-oc-sessions = "agentfoo.cli:oc_sessions"
+oc-sessions = "oc_sessions.cli:oc_sessions"
 
 
 [tool.ruff]
